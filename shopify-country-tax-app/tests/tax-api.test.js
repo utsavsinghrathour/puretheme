@@ -6,7 +6,7 @@ describe("Tax API", () => {
   const app = createApp();
 
   it("returns VAT for Germany", async () => {
-    const response = await request(app).post("/api/tax/quote").send({
+    const response = await request(app).post("/api/tax/calculate").send({
       countryCode: "DE",
       subtotal: 100,
       shipping: 10,
@@ -23,7 +23,7 @@ describe("Tax API", () => {
   });
 
   it("returns GST for India", async () => {
-    const response = await request(app).post("/api/tax/quote").send({
+    const response = await request(app).post("/api/tax/calculate").send({
       countryCode: "IN",
       subtotal: 1000,
       shipping: 0,
@@ -38,7 +38,7 @@ describe("Tax API", () => {
   });
 
   it("returns no tax for unknown countries", async () => {
-    const response = await request(app).post("/api/tax/quote").send({
+    const response = await request(app).post("/api/tax/calculate").send({
       countryCode: "AQ",
       subtotal: 250,
       shipping: 0,
@@ -53,7 +53,7 @@ describe("Tax API", () => {
   });
 
   it("returns 400 for invalid payload", async () => {
-    const response = await request(app).post("/api/tax/quote").send({
+    const response = await request(app).post("/api/tax/calculate").send({
       countryCode: "USA",
       subtotal: -10,
       currency: "US",
@@ -73,7 +73,7 @@ describe("Tax API", () => {
   it("allows adding or updating a country rule", async () => {
     const update = await request(app).post("/api/tax/rules").send({
       countryCode: "ZA",
-      taxName: "South Africa VAT",
+      label: "South Africa VAT",
       kind: "VAT",
       rate: 0.15,
       includesShipping: true,
@@ -81,11 +81,11 @@ describe("Tax API", () => {
       taxable: true,
     });
 
-    expect(update.statusCode).toBe(200);
+    expect(update.statusCode).toBe(201);
     expect(update.body.countryCode).toBe("ZA");
-    expect(update.body.rule.rate).toBe(0.15);
+    expect(update.body.rate).toBe(0.15);
 
-    const quote = await request(app).post("/api/tax/quote").send({
+    const quote = await request(app).post("/api/tax/calculate").send({
       countryCode: "ZA",
       subtotal: 200,
       shipping: 10,

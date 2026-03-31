@@ -46,11 +46,11 @@ const updateTaxRuleSchema = z.object({
 export function buildTaxRouter() {
   const router = express.Router();
 
-  router.get("/tax/rules", (_req, res) => {
+  router.get("/rules", (_req, res) => {
     return res.json({ rules: listTaxRules() });
   });
 
-  router.post("/tax/rules", (req, res) => {
+  router.post("/rules", (req, res) => {
     const parsed = updateTaxRuleSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -68,7 +68,7 @@ export function buildTaxRouter() {
     });
   });
 
-  router.post("/tax/calculate", (req, res) => {
+  const calculateHandler = (req, res) => {
     const parsed = calculateTaxSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -80,9 +80,12 @@ export function buildTaxRouter() {
 
     const result = calculateTax(parsed.data);
     return res.json(result);
-  });
+  };
 
-  router.post("/tax/shopify/carrier-service/rates", (req, res) => {
+  router.post("/calculate", calculateHandler);
+  router.post("/quote", calculateHandler);
+
+  router.post("/shopify/carrier-service/rates", (req, res) => {
     const body = req.body?.rate ?? {};
 
     const parsed = calculateTaxSchema.safeParse({
