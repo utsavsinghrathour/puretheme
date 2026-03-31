@@ -1,0 +1,31 @@
+{
+  "name": "shopify-country-tax-app",
+  "version": "1.0.0",
+  "description": "Country-aware GST/VAT/sales-tax calculator service for Shopify sites",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "shopify",
+    "tax",
+    "vat",
+    "gst",
+    "sales-tax"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.2"
+  }
+}
