@@ -63,6 +63,16 @@ class PCRM_Frontend
                 <section class="pcrm-section is-active" data-section="dashboard">
                     <div class="pcrm-metrics" id="pcrm-metrics"></div>
                     <div class="pcrm-grid-2">
+                        <div class="pcrm-card pcrm-help-card">
+                            <h3><?php esc_html_e('Important Steps', 'pure-crm-lite'); ?></h3>
+                            <div id="pcrm-help-list"></div>
+                        </div>
+                        <div class="pcrm-card pcrm-notification-card">
+                            <h3><?php esc_html_e('Follow-up Notifications', 'pure-crm-lite'); ?></h3>
+                            <div id="pcrm-notifications"></div>
+                        </div>
+                    </div>
+                    <div class="pcrm-grid-2">
                         <div class="pcrm-card">
                             <h3><?php esc_html_e('Recent Tasks', 'pure-crm-lite'); ?></h3>
                             <div id="pcrm-dashboard-tasks"></div>
@@ -107,8 +117,22 @@ class PCRM_Frontend
                 <section class="pcrm-section" data-section="funnels">
                     <div class="pcrm-grid-2">
                         <div class="pcrm-card">
+                            <h3><?php esc_html_e('Funnel Builder', 'pure-crm-lite'); ?></h3>
+                            <form id="pcrm-funnel-form" class="pcrm-form">
+                                <input type="text" name="name" placeholder="<?php esc_attr_e('Funnel name (e.g. High Ticket Sales)', 'pure-crm-lite'); ?>" required>
+                                <input type="text" name="stages" placeholder="<?php esc_attr_e('Stages: lead,discovery,proposal,won,lost', 'pure-crm-lite'); ?>" required>
+                                <label class="pcrm-check">
+                                    <input type="checkbox" name="is_default" value="1">
+                                    <?php esc_html_e('Set as default funnel', 'pure-crm-lite'); ?>
+                                </label>
+                                <button type="submit" class="pcrm-btn"><?php esc_html_e('Create Funnel', 'pure-crm-lite'); ?></button>
+                            </form>
+                            <div id="pcrm-funnel-list"></div>
+                        </div>
+                        <div class="pcrm-card">
                             <h3><?php esc_html_e('Create Deal', 'pure-crm-lite'); ?></h3>
                             <form id="pcrm-deal-form" class="pcrm-form">
+                                <select name="funnel_id" id="pcrm-deal-funnel" required></select>
                                 <select name="contact_id" id="pcrm-deal-contact" required></select>
                                 <input type="text" name="title" placeholder="<?php esc_attr_e('Deal title', 'pure-crm-lite'); ?>" required>
                                 <div class="pcrm-form-row">
@@ -116,31 +140,44 @@ class PCRM_Frontend
                                     <select name="stage" id="pcrm-deal-stage"></select>
                                 </div>
                                 <input type="date" name="expected_close">
+                                <input type="datetime-local" name="next_follow_up">
                                 <textarea name="notes" rows="3" placeholder="<?php esc_attr_e('Deal notes', 'pure-crm-lite'); ?>"></textarea>
                                 <button type="submit" class="pcrm-btn"><?php esc_html_e('Add Deal', 'pure-crm-lite'); ?></button>
                             </form>
                         </div>
-                        <div class="pcrm-card">
-                            <h3><?php esc_html_e('Pipeline', 'pure-crm-lite'); ?></h3>
-                            <div id="pcrm-funnels-board" class="pcrm-pipeline"></div>
+                    </div>
+                    <div class="pcrm-card pcrm-kanban-card">
+                        <h3><?php esc_html_e('Pipeline Kanban (Drag & Drop)', 'pure-crm-lite'); ?></h3>
+                        <div class="pcrm-inline-filter">
+                            <select id="pcrm-active-funnel"></select>
                         </div>
+                        <div id="pcrm-funnels-board" class="pcrm-pipeline"></div>
                     </div>
                 </section>
 
                 <section class="pcrm-section" data-section="tasks">
                     <div class="pcrm-grid-2">
                         <div class="pcrm-card">
-                            <h3><?php esc_html_e('Create Task', 'pure-crm-lite'); ?></h3>
+                            <h3><?php esc_html_e('Create / Update Task', 'pure-crm-lite'); ?></h3>
                             <form id="pcrm-task-form" class="pcrm-form">
+                                <input type="hidden" name="id" id="pcrm-task-id">
                                 <input type="text" name="title" placeholder="<?php esc_attr_e('Task title', 'pure-crm-lite'); ?>" required>
                                 <textarea name="description" rows="3" placeholder="<?php esc_attr_e('Description', 'pure-crm-lite'); ?>"></textarea>
                                 <div class="pcrm-form-row">
+                                    <select name="contact_id" id="pcrm-task-contact"></select>
                                     <select name="related_type">
                                         <option value="contact"><?php esc_html_e('Related to Contact', 'pure-crm-lite'); ?></option>
                                         <option value="deal"><?php esc_html_e('Related to Deal', 'pure-crm-lite'); ?></option>
                                         <option value="general"><?php esc_html_e('General', 'pure-crm-lite'); ?></option>
                                     </select>
+                                </div>
+                                <div class="pcrm-form-row">
                                     <input type="number" name="related_id" min="0" placeholder="<?php esc_attr_e('Related ID', 'pure-crm-lite'); ?>">
+                                    <select name="status">
+                                        <option value="open"><?php esc_html_e('Open', 'pure-crm-lite'); ?></option>
+                                        <option value="in_progress"><?php esc_html_e('In Progress', 'pure-crm-lite'); ?></option>
+                                        <option value="done"><?php esc_html_e('Done', 'pure-crm-lite'); ?></option>
+                                    </select>
                                 </div>
                                 <div class="pcrm-form-row">
                                     <input type="datetime-local" name="due_date">
@@ -150,7 +187,10 @@ class PCRM_Frontend
                                         <option value="high"><?php esc_html_e('High', 'pure-crm-lite'); ?></option>
                                     </select>
                                 </div>
-                                <button type="submit" class="pcrm-btn"><?php esc_html_e('Create Task', 'pure-crm-lite'); ?></button>
+                                <div class="pcrm-inline-actions">
+                                    <button type="submit" class="pcrm-btn"><?php esc_html_e('Save Task', 'pure-crm-lite'); ?></button>
+                                    <button type="button" class="pcrm-btn-link" id="pcrm-task-cancel-edit"><?php esc_html_e('Clear', 'pure-crm-lite'); ?></button>
+                                </div>
                             </form>
                         </div>
                         <div class="pcrm-card">
@@ -295,6 +335,7 @@ class PCRM_Frontend
                     'leadSuccess'    => __('Thanks! We will contact you shortly.', 'pure-crm-lite'),
                     'leadError'      => __('Unable to submit right now. Please try again.', 'pure-crm-lite'),
                     'smtpDefaultTag' => __('Default', 'pure-crm-lite'),
+                    'dropHint'       => __('Drag a deal card to another stage to update status.', 'pure-crm-lite'),
                 ),
             )
         );

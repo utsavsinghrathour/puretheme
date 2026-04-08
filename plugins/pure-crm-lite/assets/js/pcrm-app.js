@@ -1,40 +1,42 @@
 (() => {
-  const appConfig = window.PCRM_APP || {};
-  const restUrl = appConfig.restUrl || '';
-  const leadUrl = appConfig.leadUrl || '';
-  const nonce = appConfig.nonce || '';
-  const i18n = appConfig.strings || {};
+  const cfg = window.PCRM_APP || {};
+  const restUrl = cfg.restUrl || '';
+  const leadUrl = cfg.leadUrl || '';
+  const nonce = cfg.nonce || '';
+  const i18n = cfg.strings || {};
 
   const state = {
     metrics: {},
     contacts: [],
     deals: [],
     tasks: [],
+    funnels: [],
+    default_funnel: null,
     smtp_accounts: [],
     email_logs: [],
-    deal_stages: {},
+    notifications: { count: 0, items: [] },
+    help: [],
+    activeFunnelId: 0,
+    editingTaskId: 0,
   };
 
-  const qs = (selector, root = document) => root.querySelector(selector);
-  const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
-  const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (s) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
-  const loadingText = i18n.loading || 'Loading...';
+  const qs = (s, root = document) => root.querySelector(s);
+  const qsa = (s, root = document) => Array.from(root.querySelectorAll(s));
+  const safe = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
   const emptyText = i18n.empty || 'No records yet.';
+  const loadingText = i18n.loading || 'Loading...';
 
   function toast(message, type = 'ok') {
     const anchor = qs('#pcrm-toast-anchor');
     if (!anchor) return;
-    const node = document.createElement('div');
-    node.className = `pcrm-toast pcrm-toast-${type}`;
-    node.textContent = message;
-    anchor.appendChild(node);
-    window.setTimeout(() => {
-      node.classList.add('fade-out');
-      window.setTimeout(() => node.remove(), 280);
-    }, 3200);
+    const el = document.createElement('div');
+    el.className = `pcrm-toast ${type === 'bad' ? 'is-error' : 'is-success'}`;
+    el.textContent = message;
+    anchor.appendChild(el);
+    window.setTimeout(() => el.remove(), 3200);
   }
 
-  function getHeaders() {
+  function headers() {
     return {
       'Content-Type': 'application/json',
       'X-WP-Nonce': nonce,
@@ -44,8 +46,8 @@
   async function api(endpoint, method = 'GET', data = null) {
     const res = await fetch(restUrl + endpoint, {
       method,
-      headers: getHeaders(),
       credentials: 'same-origin',
+      headers: headers(),
       body: data ? JSON.stringify(data) : undefined,
     });
     let payload = null;
@@ -55,84 +57,100 @@
       payload = null;
     }
     if (!res.ok) {
-      const message = payload?.message || payload?.code || `Request failed: ${res.status}`;
-      throw new Error(message);
+      throw new Error(payload?.message || `Request failed (${res.status})`);
     }
     return payload;
   }
 
-  function setLoadingPlaceholders() {
-    const sections = [
-      '#pcrm-metrics',
-      '#pcrm-contacts-table',
-      '#pcrm-funnels-board',
-      '#pcrm-tasks-list',
-      '#pcrm-smtp-list',
-      '#pcrm-email-logs',
-      '#pcrm-dashboard-tasks',
-      '#pcrm-dashboard-emails',
-    ];
-    sections.forEach((selector) => {
-      const el = qs(selector);
-      if (el) el.innerHTML = `<p class="pcrm-muted">${safe(loadingText)}</p>`;
+  function formData(form) {
+    const fd = new FormData(form);
+    const out = {};
+    fd.forEach((val, key) => {
+      out[key] = typeof val === 'string' ? val.trim() : val;
     });
+    qsa('input[type="checkbox"]', form).forEach((c) => {
+      if (!fd.has(c.name)) out[c.name] = '';
+    });
+    return out;
   }
 
-  function renderMetrics() {
-    const metricRoot = qs('#pcrm-metrics');
-    if (!metricRoot) return;
+  function metricCards() {
+    const root = qs('#pcrm-metrics');
+    if (!root) return;
     const m = state.metrics || {};
     const cards = [
       ['Contacts', m.contacts_count || 0],
       ['Open Deals', m.open_deals_count || 0],
       ['Won Deals', m.won_deals_count || 0],
-      ['Pipeline Value', formatCurrency(m.pipeline_value || 0)],
+      ['Pipeline', money(m.pipeline_value || 0)],
       ['Overdue Tasks', m.overdue_tasks_count || 0],
+      ['Follow-ups Due', m.followups_due_count || 0],
+      ['Funnels', m.funnels_count || 0],
     ];
-    metricRoot.innerHTML = cards.map(([label, value]) => `
+    root.innerHTML = cards.map(([label, val]) => `
       <article class="pcrm-metric-card">
         <span>${safe(label)}</span>
-        <strong>${safe(value)}</strong>
+        <strong>${safe(val)}</strong>
       </article>
     `).join('');
   }
 
-  function formatCurrency(value) {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(Number(value || 0));
+  function money(v) {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(Number(v || 0));
+  }
+
+  function renderHelp() {
+    const root = qs('#pcrm-help-list');
+    if (!root) return;
+    const list = state.help || [];
+    if (!list.length) {
+      root.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
+      return;
+    }
+    root.innerHTML = list.map((h) => `
+      <article class="pcrm-help-item">
+        <h4>${safe(h.title || '')}</h4>
+        <p>${safe(h.content || '')}</p>
+      </article>
+    `).join('');
+  }
+
+  function renderNotifications() {
+    const root = qs('#pcrm-notifications');
+    if (!root) return;
+    const payload = state.notifications || { items: [] };
+    if (!payload.items?.length) {
+      root.innerHTML = `<p class="pcrm-muted">No urgent follow-ups right now.</p>`;
+      return;
+    }
+    root.innerHTML = payload.items.map((n) => `
+      <article class="pcrm-note ${n.priority === 'high' ? 'is-high' : ''}">
+        <h4>${safe(n.title || '')}</h4>
+        <p>${safe(n.message || '')}</p>
+        <small>${safe(formatDt(n.due_at))}</small>
+      </article>
+    `).join('');
   }
 
   function renderContacts() {
     const root = qs('#pcrm-contacts-table');
     if (!root) return;
-
     if (!state.contacts.length) {
       root.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
       return;
     }
-
     root.innerHTML = `
       <table class="pcrm-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Company</th>
-            <th>Phone</th>
-            <th>Source</th>
-            <th></th>
-          </tr>
-        </thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Phone</th><th>Source</th><th></th></tr></thead>
         <tbody>
           ${state.contacts.map((c) => `
             <tr>
-              <td>${safe(`${c.first_name || ''} ${c.last_name || ''}`.trim() || '(No name)')}</td>
+              <td>${safe(name(c) || '(No name)')}</td>
               <td>${safe(c.email || '')}</td>
               <td>${safe(c.company || '')}</td>
               <td>${safe(c.phone || '')}</td>
               <td>${safe(c.source || '')}</td>
-              <td class="pcrm-actions">
-                <button class="pcrm-btn-link" data-delete-contact="${c.id}">Delete</button>
-              </td>
+              <td><button class="pcrm-btn-link" data-delete-contact="${c.id}">Delete</button></td>
             </tr>
           `).join('')}
         </tbody>
@@ -140,107 +158,179 @@
     `;
   }
 
-  function renderDeals() {
-    const root = qs('#pcrm-funnels-board');
-    if (!root) return;
-
-    const stages = Object.keys(state.deal_stages || {});
-    if (!stages.length) {
-      root.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
+  function renderFunnels() {
+    const listRoot = qs('#pcrm-funnel-list');
+    const dealFunnel = qs('#pcrm-deal-funnel');
+    const activeFunnel = qs('#pcrm-active-funnel');
+    if (dealFunnel) {
+      dealFunnel.innerHTML = state.funnels.map((f) => `<option value="${f.id}">${safe(f.name)}${f.is_default ? ' (Default)' : ''}</option>`).join('');
+    }
+    if (activeFunnel) {
+      activeFunnel.innerHTML = state.funnels.map((f) => `<option value="${f.id}" ${Number(state.activeFunnelId) === Number(f.id) ? 'selected' : ''}>${safe(f.name)}</option>`).join('');
+    }
+    if (!listRoot) return;
+    if (!state.funnels.length) {
+      listRoot.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
       return;
     }
-
-    root.innerHTML = stages.map((stageKey) => {
-      const stageName = state.deal_stages[stageKey];
-      const deals = state.deals.filter((d) => d.stage === stageKey);
-      return `
-        <div class="pcrm-pipeline-col">
-          <header>
-            <h4>${safe(stageName)}</h4>
-            <span>${deals.length}</span>
-          </header>
-          ${deals.length ? deals.map((d) => `
-            <article class="pcrm-deal-card">
-              <h5>${safe(d.title)}</h5>
-              <p>${safe(d.contact_name || d.contact_email || 'No contact')}</p>
-              <strong>${safe(formatCurrency(d.value || 0))}</strong>
-              <div class="pcrm-inline-actions">
-                <select data-change-stage="${d.id}">
-                  ${stages.map((opt) => `<option value="${safe(opt)}" ${opt === d.stage ? 'selected' : ''}>${safe(state.deal_stages[opt])}</option>`).join('')}
-                </select>
-                <button class="pcrm-btn-link" data-delete-deal="${d.id}">Delete</button>
-              </div>
-            </article>
-          `).join('') : `<p class="pcrm-muted">${safe(emptyText)}</p>`}
+    listRoot.innerHTML = state.funnels.map((f) => `
+      <article class="pcrm-funnel-row">
+        <div>
+          <h4>${safe(f.name)} ${f.is_default ? '<span class="pcrm-chip">Default</span>' : ''}</h4>
+          <p>${(f.stages || []).map((s) => safe(s.label)).join(' -> ')}</p>
         </div>
+        <div class="pcrm-inline-actions">
+          ${f.is_default ? '' : `<button class="pcrm-btn-link" data-funnel-default="${f.id}">Set Default</button>`}
+          <button class="pcrm-btn-link" data-funnel-delete="${f.id}">Delete</button>
+        </div>
+      </article>
+    `).join('');
+  }
+
+  function stageMapForFunnel(fid) {
+    const f = state.funnels.find((x) => Number(x.id) === Number(fid));
+    return f?.stage_map || {};
+  }
+
+  function renderDealsKanban() {
+    const root = qs('#pcrm-funnels-board');
+    if (!root) return;
+    const funnelId = Number(state.activeFunnelId || state.default_funnel?.id || 0);
+    const map = stageMapForFunnel(funnelId);
+    const stages = Object.keys(map);
+    if (!stages.length) {
+      root.innerHTML = `<p class="pcrm-muted">Create a funnel with stages first.</p>`;
+      return;
+    }
+    const deals = state.deals.filter((d) => Number(d.funnel_id) === funnelId);
+    root.innerHTML = stages.map((stageKey) => {
+      const laneDeals = deals.filter((d) => d.stage === stageKey);
+      return `
+        <section class="pcrm-lane" data-stage="${safe(stageKey)}">
+          <header><h4>${safe(map[stageKey])}</h4><span>${laneDeals.length}</span></header>
+          <div class="pcrm-lane-drop" data-drop-stage="${safe(stageKey)}">
+            ${laneDeals.map((d) => `
+              <article class="pcrm-deal-card" draggable="true" data-deal-id="${d.id}" data-deal-stage="${safe(d.stage)}">
+                <h5>${safe(d.title)}</h5>
+                <p>${safe(d.contact_name || d.contact_email || 'No contact')}</p>
+                <strong>${safe(money(d.value || 0))}</strong>
+                <small>Follow-up: ${safe(formatDt(d.next_follow_up))}</small>
+                <div class="pcrm-inline-actions">
+                  <button class="pcrm-btn-link" data-delete-deal="${d.id}">Delete</button>
+                </div>
+              </article>
+            `).join('')}
+          </div>
+        </section>
       `;
     }).join('');
+    bindKanbanDnD();
+  }
+
+  function bindKanbanDnD() {
+    qsa('.pcrm-deal-card[draggable="true"]').forEach((card) => {
+      card.addEventListener('dragstart', (e) => {
+        e.dataTransfer?.setData('text/plain', card.getAttribute('data-deal-id') || '');
+      });
+    });
+    qsa('[data-drop-stage]').forEach((lane) => {
+      lane.addEventListener('dragover', (e) => e.preventDefault());
+      lane.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        const dealId = e.dataTransfer?.getData('text/plain');
+        const stage = lane.getAttribute('data-drop-stage');
+        if (!dealId || !stage) return;
+        try {
+          await api(`deals/${dealId}`, 'PUT', { stage });
+          await refreshAll();
+          toast(i18n.dropHint || 'Deal stage updated.');
+        } catch (err) {
+          toast(err.message, 'bad');
+        }
+      });
+    });
   }
 
   function renderTasks() {
     const root = qs('#pcrm-tasks-list');
-    const dashboardRoot = qs('#pcrm-dashboard-tasks');
-    if (!root && !dashboardRoot) return;
-
+    const dash = qs('#pcrm-dashboard-tasks');
+    if (!root && !dash) return;
     if (!state.tasks.length) {
       if (root) root.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
-      if (dashboardRoot) dashboardRoot.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
+      if (dash) dash.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
       return;
     }
-
-    const taskHtml = state.tasks.map((t) => `
+    const html = state.tasks.map((t) => `
       <article class="pcrm-task-item">
         <div>
           <h5>${safe(t.title)}</h5>
           <p>${safe(t.description || '')}</p>
-          <small>${safe(t.status)} • ${safe(t.priority)} ${t.due_date ? `• due ${safe(new Date(t.due_date).toLocaleString())}` : ''}</small>
+          <small>${safe(t.status)} • ${safe(t.priority)} • ${safe(t.contact_name || t.contact_email || 'Unassigned')} ${t.due_date ? `• due ${safe(formatDt(t.due_date))}` : ''}</small>
         </div>
         <div class="pcrm-inline-actions">
-          <select data-change-task-status="${t.id}">
-            ${['open', 'in_progress', 'done'].map((s) => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${safe(s)}</option>`).join('')}
-          </select>
+          <button class="pcrm-btn-link" data-edit-task="${t.id}">Edit</button>
           <button class="pcrm-btn-link" data-delete-task="${t.id}">Delete</button>
         </div>
       </article>
     `).join('');
+    if (root) root.innerHTML = html;
+    if (dash) dash.innerHTML = state.tasks.slice(0, 6).map((t) => `<div class="pcrm-mini-row"><span>${safe(t.title)}</span><strong>${safe(t.status)}</strong></div>`).join('');
+  }
 
-    if (root) root.innerHTML = taskHtml;
-    if (dashboardRoot) dashboardRoot.innerHTML = state.tasks.slice(0, 6).map((t) => `
-      <div class="pcrm-mini-row">
-        <span>${safe(t.title)}</span>
-        <strong>${safe(t.status)}</strong>
-      </div>
-    `).join('');
+  function renderEmails() {
+    const root = qs('#pcrm-email-logs');
+    const dash = qs('#pcrm-dashboard-emails');
+    const select = qs('#pcrm-email-smtp');
+    if (select) {
+      select.innerHTML = ['<option value="">Use default sender</option>']
+        .concat(state.smtp_accounts.map((a) => `<option value="${a.id}">${safe(a.label)} (${safe(a.from_email)})${a.is_default ? ' - Default' : ''}</option>`))
+        .join('');
+    }
+    if (root) {
+      const list = state.email_logs || [];
+      if (!list.length) {
+        root.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
+      } else {
+        root.innerHTML = `
+          <table class="pcrm-table">
+            <thead><tr><th>When</th><th>From</th><th>To</th><th>Subject</th><th>Status</th></tr></thead>
+            <tbody>
+              ${list.map((l) => {
+                const rec = parseRecipients(l.recipients);
+                return `<tr><td>${safe(formatDt(l.created_at))}</td><td>${safe(l.smtp_label || l.from_email || 'N/A')}</td><td>${safe(rec)}</td><td>${safe(l.subject || '')}</td><td>${safe(l.status || '')}</td></tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+    }
+    if (dash) {
+      dash.innerHTML = (state.email_logs || []).slice(0, 6).map((l) => `<div class="pcrm-mini-row"><span>${safe(l.subject || '(No subject)')}</span><strong>${safe(l.status || '')}</strong></div>`).join('');
+    }
+  }
+
+  function parseRecipients(raw) {
+    try {
+      const p = JSON.parse(raw || '[]');
+      return Array.isArray(p) ? p.join(', ') : '';
+    } catch (e) {
+      return raw || '';
+    }
   }
 
   function renderSmtp() {
     const root = qs('#pcrm-smtp-list');
-    const select = qs('#pcrm-email-smtp');
-    if (!root && !select) return;
-
-    const defaultTag = i18n.smtpDefaultTag || 'Default';
-    if (select) {
-      const options = ['<option value="">Use default sender</option>'].concat(
-        state.smtp_accounts.map((a) => {
-          const label = `${a.label} (${a.from_email})${a.is_default ? ` - ${defaultTag}` : ''}${a.active ? '' : ' - inactive'}`;
-          return `<option value="${a.id}">${safe(label)}</option>`;
-        })
-      );
-      select.innerHTML = options.join('');
-    }
-
     if (!root) return;
     if (!state.smtp_accounts.length) {
-      root.innerHTML = `<p class="pcrm-muted">No SMTP accounts yet. Add one to send emails.</p>`;
+      root.innerHTML = `<p class="pcrm-muted">No SMTP accounts yet.</p>`;
       return;
     }
-
     root.innerHTML = state.smtp_accounts.map((a) => `
       <article class="pcrm-smtp-card ${a.active ? '' : 'is-inactive'}">
         <div>
-          <h5>${safe(a.label)} ${a.is_default ? `<span class="pcrm-chip">${safe(defaultTag)}</span>` : ''}</h5>
+          <h5>${safe(a.label)} ${a.is_default ? '<span class="pcrm-chip">Default</span>' : ''}</h5>
           <p>${safe(a.from_name || a.from_email)} &lt;${safe(a.from_email)}&gt;</p>
-          <small>${safe(`${a.host}:${a.port} • ${a.encryption.toUpperCase()}`)}</small>
+          <small>${safe(a.host)}:${safe(a.port)} • ${safe((a.encryption || '').toUpperCase())}</small>
         </div>
         <div class="pcrm-inline-actions">
           ${a.is_default ? '' : `<button class="pcrm-btn-link" data-make-default-smtp="${a.id}">Set Default</button>`}
@@ -250,144 +340,88 @@
     `).join('');
   }
 
-  function renderEmailLogs() {
-    const root = qs('#pcrm-email-logs');
-    const dashboardRoot = qs('#pcrm-dashboard-emails');
-    if (!root && !dashboardRoot) return;
+  function fillHelpers() {
+    const contactOptions = ['<option value="">Select contact</option>'].concat(
+      state.contacts.map((c) => `<option value="${c.id}">${safe(name(c) || c.email)} (${safe(c.email || '')})</option>`)
+    ).join('');
+    const dealContact = qs('#pcrm-deal-contact');
+    const taskContact = qs('#pcrm-task-contact');
+    if (dealContact) dealContact.innerHTML = contactOptions;
+    if (taskContact) taskContact.innerHTML = ['<option value="">Unassigned</option>'].concat(
+      state.contacts.map((c) => `<option value="${c.id}">${safe(name(c) || c.email)}</option>`)
+    ).join('');
 
-    const list = state.email_logs || [];
-    if (!list.length) {
-      if (root) root.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
-      if (dashboardRoot) dashboardRoot.innerHTML = `<p class="pcrm-muted">${safe(emptyText)}</p>`;
-      return;
-    }
-
-    if (root) {
-      root.innerHTML = `
-        <table class="pcrm-table">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>From</th>
-              <th>To</th>
-              <th>Subject</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${list.map((l) => {
-              let recipients = '';
-              try {
-                const parsed = JSON.parse(l.recipients || '[]');
-                recipients = Array.isArray(parsed) ? parsed.join(', ') : '';
-              } catch (e) {
-                recipients = l.recipients || '';
-              }
-              return `
-                <tr>
-                  <td>${safe(new Date(l.created_at).toLocaleString())}</td>
-                  <td>${safe(l.smtp_label || l.from_email || 'N/A')}</td>
-                  <td>${safe(recipients)}</td>
-                  <td>${safe(l.subject || '')}</td>
-                  <td><span class="pcrm-chip ${l.status === 'sent' ? 'ok' : 'bad'}">${safe(l.status)}</span></td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
-      `;
-    }
-
-    if (dashboardRoot) {
-      dashboardRoot.innerHTML = list.slice(0, 6).map((l) => `
-        <div class="pcrm-mini-row">
-          <span>${safe(l.subject || '(No subject)')}</span>
-          <strong>${safe(l.status)}</strong>
-        </div>
-      `).join('');
+    const activeFunnel = state.activeFunnelId || state.default_funnel?.id || state.funnels?.[0]?.id || 0;
+    state.activeFunnelId = Number(activeFunnel || 0);
+    const stageMap = stageMapForFunnel(state.activeFunnelId);
+    const dealStage = qs('#pcrm-deal-stage');
+    if (dealStage) {
+      dealStage.innerHTML = Object.entries(stageMap).map(([k, v]) => `<option value="${safe(k)}">${safe(v)}</option>`).join('');
     }
   }
 
-  function fillDealFormHelpers() {
-    const contactSelect = qs('#pcrm-deal-contact');
-    if (contactSelect) {
-      const options = ['<option value="">Select contact</option>'].concat(
-        state.contacts.map((c) => {
-          const name = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email;
-          return `<option value="${c.id}">${safe(name)} (${safe(c.email)})</option>`;
-        })
-      );
-      contactSelect.innerHTML = options.join('');
-    }
-
-    const stageSelect = qs('#pcrm-deal-stage');
-    if (stageSelect) {
-      stageSelect.innerHTML = Object.entries(state.deal_stages || {}).map(([value, label]) => (
-        `<option value="${safe(value)}">${safe(label)}</option>`
-      )).join('');
-    }
+  function renderAll() {
+    metricCards();
+    renderHelp();
+    renderNotifications();
+    renderContacts();
+    renderFunnels();
+    fillHelpers();
+    renderDealsKanban();
+    renderTasks();
+    renderEmails();
+    renderSmtp();
   }
 
-  function bindNavigation() {
+  async function refreshAll() {
+    setLoading();
+    const b = await api('bootstrap');
+    state.metrics = b.metrics || {};
+    state.contacts = b.contacts || [];
+    state.deals = b.deals || [];
+    state.tasks = b.tasks || [];
+    state.funnels = b.funnels || [];
+    state.default_funnel = b.default_funnel || null;
+    state.smtp_accounts = b.smtp_accounts || [];
+    state.email_logs = b.email_logs || [];
+    state.notifications = b.notifications || { count: 0, items: [] };
+    state.help = b.help || [];
+    if (!state.activeFunnelId) {
+      state.activeFunnelId = Number(state.default_funnel?.id || state.funnels?.[0]?.id || 0);
+    }
+    renderAll();
+  }
+
+  function setLoading() {
+    ['#pcrm-metrics', '#pcrm-help-list', '#pcrm-notifications', '#pcrm-contacts-table', '#pcrm-funnels-board', '#pcrm-tasks-list', '#pcrm-email-logs', '#pcrm-smtp-list']
+      .forEach((s) => {
+        const el = qs(s);
+        if (el) el.innerHTML = `<p class="pcrm-muted">${safe(loadingText)}</p>`;
+      });
+  }
+
+  function bindNav() {
     const app = qs('#pcrm-app');
     if (!app) return;
     qsa('.pcrm-nav-btn', app).forEach((btn) => {
       btn.addEventListener('click', () => {
-        const section = btn.getAttribute('data-section');
-        qsa('.pcrm-nav-btn', app).forEach((b) => b.classList.remove('is-active'));
+        const sec = btn.getAttribute('data-section');
+        qsa('.pcrm-nav-btn', app).forEach((n) => n.classList.remove('is-active'));
         qsa('.pcrm-section', app).forEach((s) => s.classList.remove('is-active'));
         btn.classList.add('is-active');
-        const target = qs(`.pcrm-section[data-section="${section}"]`, app);
-        if (target) target.classList.add('is-active');
+        qs(`.pcrm-section[data-section="${sec}"]`, app)?.classList.add('is-active');
       });
     });
   }
 
-  function serializeForm(form) {
-    const data = {};
-    const fd = new FormData(form);
-    fd.forEach((value, key) => {
-      if (typeof value === 'string') data[key] = value.trim();
-    });
-
-    // Preserve unchecked checkboxes as false-ish values where relevant.
-    qsa('input[type="checkbox"]', form).forEach((input) => {
-      if (!fd.has(input.name)) data[input.name] = '';
-    });
-    return data;
-  }
-
-  async function refreshAll() {
-    setLoadingPlaceholders();
-    const bootstrap = await api('bootstrap');
-    state.metrics = bootstrap.metrics || {};
-    state.contacts = bootstrap.contacts || [];
-    state.deals = bootstrap.deals || [];
-    state.tasks = bootstrap.tasks || [];
-    state.smtp_accounts = bootstrap.smtp_accounts || [];
-    state.email_logs = bootstrap.email_logs || [];
-    state.deal_stages = bootstrap.deal_stages || {};
-    renderAll();
-  }
-
-  function renderAll() {
-    renderMetrics();
-    renderContacts();
-    renderDeals();
-    renderTasks();
-    renderSmtp();
-    renderEmailLogs();
-    fillDealFormHelpers();
-  }
-
   function bindForms() {
-    const contactForm = qs('#pcrm-contact-form');
-    if (contactForm) {
-      contactForm.addEventListener('submit', async (e) => {
+    const contact = qs('#pcrm-contact-form');
+    if (contact) {
+      contact.addEventListener('submit', async (e) => {
         e.preventDefault();
         try {
-          await api('contacts', 'POST', serializeForm(contactForm));
-          contactForm.reset();
+          await api('contacts', 'POST', formData(contact));
+          contact.reset();
           await refreshAll();
           toast(i18n.saved || 'Saved.');
         } catch (err) {
@@ -396,18 +430,36 @@
       });
     }
 
-    const dealForm = qs('#pcrm-deal-form');
-    if (dealForm) {
-      dealForm.addEventListener('submit', async (e) => {
+    const funnel = qs('#pcrm-funnel-form');
+    if (funnel) {
+      funnel.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const payload = serializeForm(dealForm);
+        const payload = formData(funnel);
+        payload.is_default = payload.is_default ? 1 : 0;
+        try {
+          await api('funnels', 'POST', payload);
+          funnel.reset();
+          await refreshAll();
+          toast(i18n.saved || 'Saved.');
+        } catch (err) {
+          toast(err.message, 'bad');
+        }
+      });
+    }
+
+    const deal = qs('#pcrm-deal-form');
+    if (deal) {
+      deal.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = formData(deal);
+        if (payload.next_follow_up) payload.next_follow_up = payload.next_follow_up.replace('T', ' ');
         if (!payload.contact_id) {
-          toast('Select a contact for this deal.', 'bad');
+          toast('Choose a contact for this deal.', 'bad');
           return;
         }
         try {
           await api('deals', 'POST', payload);
-          dealForm.reset();
+          deal.reset();
           await refreshAll();
           toast(i18n.saved || 'Saved.');
         } catch (err) {
@@ -416,15 +468,25 @@
       });
     }
 
-    const taskForm = qs('#pcrm-task-form');
-    if (taskForm) {
-      taskForm.addEventListener('submit', async (e) => {
+    const task = qs('#pcrm-task-form');
+    const cancelEdit = qs('#pcrm-task-cancel-edit');
+    if (cancelEdit) {
+      cancelEdit.addEventListener('click', () => clearTaskForm());
+    }
+    if (task) {
+      task.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const payload = serializeForm(taskForm);
+        const payload = formData(task);
+        const id = Number(payload.id || 0);
+        delete payload.id;
         if (payload.due_date) payload.due_date = payload.due_date.replace('T', ' ');
         try {
-          await api('tasks', 'POST', payload);
-          taskForm.reset();
+          if (id > 0) {
+            await api(`tasks/${id}`, 'PUT', payload);
+          } else {
+            await api('tasks', 'POST', payload);
+          }
+          clearTaskForm();
           await refreshAll();
           toast(i18n.saved || 'Saved.');
         } catch (err) {
@@ -433,19 +495,19 @@
       });
     }
 
-    const smtpForm = qs('#pcrm-smtp-form');
-    if (smtpForm) {
-      smtpForm.addEventListener('submit', async (e) => {
+    const smtp = qs('#pcrm-smtp-form');
+    if (smtp) {
+      smtp.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const payload = serializeForm(smtpForm);
+        const payload = formData(smtp);
         payload.is_default = payload.is_default ? 1 : 0;
         payload.active = payload.active ? 1 : 0;
         try {
           await api('smtp', 'POST', payload);
-          smtpForm.reset();
-          const port = qs('input[name="port"]', smtpForm);
+          smtp.reset();
+          const port = qs('input[name="port"]', smtp);
           if (port) port.value = '587';
-          const active = qs('input[name="active"]', smtpForm);
+          const active = qs('input[name="active"]', smtp);
           if (active) active.checked = true;
           await refreshAll();
           toast(i18n.saved || 'Saved.');
@@ -455,15 +517,15 @@
       });
     }
 
-    const emailForm = qs('#pcrm-email-form');
-    if (emailForm) {
-      emailForm.addEventListener('submit', async (e) => {
+    const email = qs('#pcrm-email-form');
+    if (email) {
+      email.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const payload = serializeForm(emailForm);
+        const payload = formData(email);
         if (!payload.smtp_account_id) delete payload.smtp_account_id;
         try {
           await api('emails/send', 'POST', payload);
-          emailForm.reset();
+          email.reset();
           await refreshAll();
           toast(i18n.sendOk || 'Email sent.');
         } catch (err) {
@@ -472,12 +534,11 @@
       });
     }
 
-    const leadForms = qsa('.pcrm-lead-form');
-    leadForms.forEach((form) => {
+    qsa('.pcrm-lead-form').forEach((form) => {
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const msg = qs('.pcrm-lead-msg', form);
-        const payload = serializeForm(form);
+        const payload = formData(form);
         payload.source = form.getAttribute('data-source') || payload.source || 'Website Lead Form';
         try {
           const res = await fetch(leadUrl, {
@@ -485,9 +546,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
-          if (!res.ok) {
-            throw new Error('Lead submit failed');
-          }
+          if (!res.ok) throw new Error('Lead submit failed');
           form.reset();
           if (msg) msg.textContent = i18n.leadSuccess || 'Thanks!';
         } catch (err) {
@@ -497,12 +556,12 @@
     });
   }
 
-  function bindDynamicActions() {
+  function bindDynamic() {
     document.addEventListener('click', async (e) => {
-      const deleteContactId = e.target?.getAttribute?.('data-delete-contact');
-      if (deleteContactId) {
+      const delContact = e.target?.getAttribute?.('data-delete-contact');
+      if (delContact) {
         try {
-          await api(`contacts/${deleteContactId}`, 'DELETE');
+          await api(`contacts/${delContact}`, 'DELETE');
           await refreshAll();
           toast(i18n.deleted || 'Deleted.');
         } catch (err) {
@@ -510,10 +569,10 @@
         }
       }
 
-      const deleteDealId = e.target?.getAttribute?.('data-delete-deal');
-      if (deleteDealId) {
+      const delDeal = e.target?.getAttribute?.('data-delete-deal');
+      if (delDeal) {
         try {
-          await api(`deals/${deleteDealId}`, 'DELETE');
+          await api(`deals/${delDeal}`, 'DELETE');
           await refreshAll();
           toast(i18n.deleted || 'Deleted.');
         } catch (err) {
@@ -521,10 +580,10 @@
         }
       }
 
-      const deleteTaskId = e.target?.getAttribute?.('data-delete-task');
-      if (deleteTaskId) {
+      const delTask = e.target?.getAttribute?.('data-delete-task');
+      if (delTask) {
         try {
-          await api(`tasks/${deleteTaskId}`, 'DELETE');
+          await api(`tasks/${delTask}`, 'DELETE');
           await refreshAll();
           toast(i18n.deleted || 'Deleted.');
         } catch (err) {
@@ -532,10 +591,16 @@
         }
       }
 
-      const makeDefaultSmtp = e.target?.getAttribute?.('data-make-default-smtp');
-      if (makeDefaultSmtp) {
+      const editTask = e.target?.getAttribute?.('data-edit-task');
+      if (editTask) {
+        const task = state.tasks.find((t) => Number(t.id) === Number(editTask));
+        if (task) fillTaskForm(task);
+      }
+
+      const funnelDefault = e.target?.getAttribute?.('data-funnel-default');
+      if (funnelDefault) {
         try {
-          await api(`smtp/${makeDefaultSmtp}/default`, 'POST', {});
+          await api(`funnels/${funnelDefault}/default`, 'POST', {});
           await refreshAll();
           toast(i18n.saved || 'Saved.');
         } catch (err) {
@@ -543,10 +608,32 @@
         }
       }
 
-      const deleteSmtpId = e.target?.getAttribute?.('data-delete-smtp');
-      if (deleteSmtpId) {
+      const funnelDelete = e.target?.getAttribute?.('data-funnel-delete');
+      if (funnelDelete) {
         try {
-          await api(`smtp/${deleteSmtpId}`, 'DELETE');
+          await api(`funnels/${funnelDelete}`, 'DELETE');
+          await refreshAll();
+          toast(i18n.deleted || 'Deleted.');
+        } catch (err) {
+          toast(err.message, 'bad');
+        }
+      }
+
+      const smtpDefault = e.target?.getAttribute?.('data-make-default-smtp');
+      if (smtpDefault) {
+        try {
+          await api(`smtp/${smtpDefault}/default`, 'POST', {});
+          await refreshAll();
+          toast(i18n.saved || 'Saved.');
+        } catch (err) {
+          toast(err.message, 'bad');
+        }
+      }
+
+      const smtpDelete = e.target?.getAttribute?.('data-delete-smtp');
+      if (smtpDelete) {
+        try {
+          await api(`smtp/${smtpDelete}`, 'DELETE');
           await refreshAll();
           toast(i18n.deleted || 'Deleted.');
         } catch (err) {
@@ -555,39 +642,25 @@
       }
     });
 
-    document.addEventListener('change', async (e) => {
-      const dealId = e.target?.getAttribute?.('data-change-stage');
-      if (dealId) {
-        try {
-          await api(`deals/${dealId}`, 'PUT', { stage: e.target.value });
-          await refreshAll();
-        } catch (err) {
-          toast(err.message, 'bad');
-        }
-      }
+    const activeFunnel = qs('#pcrm-active-funnel');
+    if (activeFunnel) {
+      activeFunnel.addEventListener('change', () => {
+        state.activeFunnelId = Number(activeFunnel.value || 0);
+        fillHelpers();
+        renderDealsKanban();
+      });
+    }
 
-      const taskId = e.target?.getAttribute?.('data-change-task-status');
-      if (taskId) {
-        try {
-          await api(`tasks/${taskId}`, 'PUT', { status: e.target.value });
-          await refreshAll();
-        } catch (err) {
-          toast(err.message, 'bad');
-        }
-      }
-    });
-
-    const searchInput = qs('#pcrm-contact-search');
-    if (searchInput) {
+    const contactSearch = qs('#pcrm-contact-search');
+    if (contactSearch) {
       let timer = null;
-      searchInput.addEventListener('input', () => {
+      contactSearch.addEventListener('input', () => {
         window.clearTimeout(timer);
         timer = window.setTimeout(async () => {
           try {
-            const results = await api(`contacts?search=${encodeURIComponent(searchInput.value)}`);
-            state.contacts = results || [];
+            state.contacts = await api(`contacts?search=${encodeURIComponent(contactSearch.value)}`);
             renderContacts();
-            fillDealFormHelpers();
+            fillHelpers();
           } catch (err) {
             toast(err.message, 'bad');
           }
@@ -596,14 +669,56 @@
     }
   }
 
-  async function initApp() {
+  function fillTaskForm(task) {
+    const form = qs('#pcrm-task-form');
+    if (!form || !task) return;
+    state.editingTaskId = Number(task.id || 0);
+    qs('#pcrm-task-id', form).value = String(task.id || '');
+    const setVal = (n, v) => { const el = qs(`[name="${n}"]`, form); if (el) el.value = v ?? ''; };
+    setVal('title', task.title || '');
+    setVal('description', task.description || '');
+    setVal('contact_id', task.contact_id || '');
+    setVal('related_type', task.related_type || 'contact');
+    setVal('related_id', task.related_id || '');
+    setVal('status', task.status || 'open');
+    setVal('priority', task.priority || 'normal');
+    setVal('due_date', toLocal(task.due_date));
+  }
+
+  function clearTaskForm() {
+    const form = qs('#pcrm-task-form');
+    if (!form) return;
+    form.reset();
+    const hidden = qs('#pcrm-task-id', form);
+    if (hidden) hidden.value = '';
+    state.editingTaskId = 0;
+  }
+
+  function toLocal(datetime) {
+    if (!datetime) return '';
+    const dt = new Date(datetime.replace(' ', 'T') + 'Z');
+    if (Number.isNaN(dt.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  }
+
+  function formatDt(datetime) {
+    if (!datetime) return 'Not set';
+    const d = new Date(datetime.replace(' ', 'T') + 'Z');
+    if (Number.isNaN(d.getTime())) return datetime;
+    return d.toLocaleString();
+  }
+
+  function name(c) {
+    return `${c.first_name || ''} ${c.last_name || ''}`.trim();
+  }
+
+  async function init() {
     if (!qs('#pcrm-app') && !qsa('.pcrm-lead-form').length) return;
-
     bindForms();
-    bindDynamicActions();
-
+    bindDynamic();
     if (qs('#pcrm-app')) {
-      bindNavigation();
+      bindNav();
       try {
         await refreshAll();
       } catch (err) {
@@ -613,8 +728,8 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initApp);
+    document.addEventListener('DOMContentLoaded', init);
   } else {
-    initApp();
+    init();
   }
 })();

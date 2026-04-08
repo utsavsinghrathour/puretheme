@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pure CRM Lite
  * Description: Frontend-first WordPress CRM with contacts, funnels, tasks, and multi-SMTP email sending.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Author: PureTheme
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -13,7 +13,7 @@ if (! defined('ABSPATH')) {
     exit;
 }
 
-define('PCRM_VERSION', '0.1.0');
+define('PCRM_VERSION', '0.2.0');
 define('PCRM_PLUGIN_FILE', __FILE__);
 define('PCRM_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('PCRM_PLUGIN_URL', plugin_dir_url(__FILE__));
