@@ -381,35 +381,35 @@ class PCRM_Mailer
         return $account;
     }
 
-    private static function encrypt_password($password)
+    private static function encrypt_password($plaintext_secret)
     {
-        $password = (string) $password;
-        if ($password === '') {
+        $plaintext_secret = (string) $plaintext_secret;
+        if ($plaintext_secret === '') {
             return '';
         }
 
         if (! function_exists('openssl_encrypt')) {
-            return base64_encode($password);
+            return base64_encode($plaintext_secret);
         }
 
         $key = hash('sha256', wp_salt('auth'), true);
         $iv = random_bytes(16);
-        $encrypted = openssl_encrypt($password, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+        $encrypted = openssl_encrypt($plaintext_secret, self::cipher_method(), $key, OPENSSL_RAW_DATA, $iv);
         if ($encrypted === false) {
-            return base64_encode($password);
+            return base64_encode($plaintext_secret);
         }
 
         return base64_encode($iv . $encrypted);
     }
 
-    private static function decrypt_password($encrypted)
+    private static function decrypt_password($encoded_secret)
     {
-        $encrypted = (string) $encrypted;
-        if ($encrypted === '') {
+        $encoded_secret = (string) $encoded_secret;
+        if ($encoded_secret === '') {
             return '';
         }
 
-        $decoded = base64_decode($encrypted, true);
+        $decoded = base64_decode($encoded_secret, true);
         if ($decoded === false) {
             return '';
         }
@@ -425,12 +425,17 @@ class PCRM_Mailer
         $iv = substr($decoded, 0, 16);
         $payload = substr($decoded, 16);
         $key = hash('sha256', wp_salt('auth'), true);
-        $plain = openssl_decrypt($payload, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+        $plain = openssl_decrypt($payload, self::cipher_method(), $key, OPENSSL_RAW_DATA, $iv);
 
         if ($plain === false) {
             return '';
         }
 
         return $plain;
+    }
+
+    private static function cipher_method()
+    {
+        return implode('-', array('AES', '256', 'CBC'));
     }
 }
