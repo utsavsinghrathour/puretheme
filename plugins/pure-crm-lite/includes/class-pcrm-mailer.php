@@ -389,17 +389,17 @@ class PCRM_Mailer
         }
 
         if (! function_exists('openssl_encrypt')) {
-            return base64_encode($plaintext_secret);
+            return self::fallback_prefix() . base64_encode($plaintext_secret);
         }
 
         $key = hash('sha256', wp_salt('auth'), true);
         $iv = random_bytes(16);
         $encrypted = openssl_encrypt($plaintext_secret, self::cipher_method(), $key, OPENSSL_RAW_DATA, $iv);
         if ($encrypted === false) {
-            return base64_encode($plaintext_secret);
+            return self::fallback_prefix() . base64_encode($plaintext_secret);
         }
 
-        return base64_encode($iv . $encrypted);
+        return self::openssl_prefix() . base64_encode($iv . $encrypted);
     }
 
     private static function decrypt_password($encoded_secret)
@@ -409,21 +409,56 @@ class PCRM_Mailer
             return '';
         }
 
-        $decoded = base64_decode($encoded_secret, true);
+        if (strpos($encoded_secret, self::openssl_prefix()) === 0) {
+            $payload_b64 = substr($encoded_secret, strlen(self::openssl_prefix()));
+            return self::decrypt_openssl_payload($payload_b64);
+        }
+
+        if (strpos($encoded_secret, self::fallback_prefix()) === 0) {
+            $payload_b64 = substr($encoded_secret, strlen(self::fallback_prefix()));
+            $decoded = base64_decode($payload_b64, true);
+            return $decoded === false ? '' : $decoded;
+        }
+
+        // Legacy payload migration path:
+        // 1) Try OpenSSL format first.
+        // 2) If decrypt fails, treat it as plaintext base64 fallback.
+        $legacy_decoded = base64_decode($encoded_secret, true);
+        if ($legacy_decoded === false) {
+            return '';
+        }
+        $legacy_decrypted = self::decrypt_legacy_openssl_payload($legacy_decoded);
+        if ($legacy_decrypted !== '') {
+            return $legacy_decrypted;
+        }
+
+        return $legacy_decoded;
+    }
+
+    private static function decrypt_openssl_payload($payload_b64)
+    {
+        $decoded = base64_decode((string) $payload_b64, true);
         if ($decoded === false) {
             return '';
         }
+        return self::decrypt_legacy_openssl_payload($decoded);
+    }
 
+    private static function decrypt_legacy_openssl_payload($decoded_binary)
+    {
         if (! function_exists('openssl_decrypt')) {
-            return $decoded;
+            return '';
+        }
+        if (strlen((string) $decoded_binary) <= 16) {
+            return '';
         }
 
-        if (strlen($decoded) <= 16) {
-            return $decoded;
+        $decoded_binary = (string) $decoded_binary;
+        $iv = substr($decoded_binary, 0, 16);
+        $payload = substr($decoded_binary, 16);
+        if ($payload === '') {
+            return '';
         }
-
-        $iv = substr($decoded, 0, 16);
-        $payload = substr($decoded, 16);
         $key = hash('sha256', wp_salt('auth'), true);
         $plain = openssl_decrypt($payload, self::cipher_method(), $key, OPENSSL_RAW_DATA, $iv);
 
@@ -437,5 +472,15 @@ class PCRM_Mailer
     private static function cipher_method()
     {
         return implode('-', array('AES', '256', 'CBC'));
+    }
+
+    private static function openssl_prefix()
+    {
+        return 'enc:';
+    }
+
+    private static function fallback_prefix()
+    {
+        return 'plain:';
     }
 }

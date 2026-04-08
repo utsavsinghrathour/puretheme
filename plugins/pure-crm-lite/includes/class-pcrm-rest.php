@@ -282,7 +282,8 @@ class PCRM_REST
             return new WP_Error('pcrm_forbidden', __('Please log in to use CRM.', 'pure-crm-lite'), array('status' => 401));
         }
 
-        $required_capability = apply_filters('pcrm_required_capability', 'read');
+        // Use a privileged default capability so subscribers/customers cannot access CRM operations.
+        $required_capability = apply_filters('pcrm_required_capability', 'manage_options');
         if (! current_user_can($required_capability)) {
             return new WP_Error('pcrm_capability_forbidden', __('You do not have access to CRM.', 'pure-crm-lite'), array('status' => 403));
         }
